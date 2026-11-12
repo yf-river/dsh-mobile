@@ -18,6 +18,14 @@ const HOST_ACTIVATION_TIMEOUT_MS = 5_000
 /** The previous Host outlives the hidden-page refresh interval and one timed refresh. */
 const RETIRED_GENERATION_TTL_MS = 10 * 60_000
 
+/**
+ * How often the local extension directory is re-read for changes.
+ *
+ * Every tick stats the tree and may re-read manifests, so this is steady
+ * background work in the gateway process rather than a user-driven cost.
+ */
+const LOCAL_EXTENSION_POLL_MS = 10_000
+
 /** Extension teardown is advisory and must never stop watcher progress. */
 const HOST_TEARDOWN_TIMEOUT_MS = 2_000
 
@@ -789,7 +797,11 @@ export class MobileAccessService extends Service {
     if (this.localClosed || this.localLifecycle !== lifecycle || this.localRoot !== targetRoot || this.localContext !== context) return
     await this.refreshLocal()
     if (this.localClosed || this.localLifecycle !== lifecycle || this.localRoot !== targetRoot || this.localContext !== context) return
-    this.localTimer = setInterval(() => { void this.refreshLocal() }, 2_000)
+    // A local extension directory changes when its author edits it, which is
+    // not a per-second event. Each tick stats and may re-read every manifest,
+    // so a coarser interval removes steady work from the gateway process
+    // without making an edit noticeably slower to appear.
+    this.localTimer = setInterval(() => { void this.refreshLocal() }, LOCAL_EXTENSION_POLL_MS)
     this.localTimer.unref()
   }
 

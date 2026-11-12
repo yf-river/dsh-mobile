@@ -1444,6 +1444,11 @@ export class MobileAccessGateway {
   private extensionChangeTimer: NodeJS.Timeout | undefined
   private extensionChangeTask: Promise<void> | undefined
   private legacyCustomDigest = ''
+  /**
+   * Per-file `size:mtime` stamp and digest, so the change poll hashes a
+   * customization file only when it may have changed.
+   */
+  private readonly legacyCustomStat = new Map<string, { stamp: string; digest: string }>()
   private upstreamCookie: string | undefined
   private upstreamCookieExpiresAt = 0
   private upstreamCookieTask: Promise<string> | undefined
@@ -4198,12 +4203,27 @@ export class MobileAccessGateway {
 
   private pollLegacyCustomChanges(): Promise<void> {
     if (this.extensionChangeTask !== undefined) return this.extensionChangeTask
+    /**
+     * Digest one customization file, reusing the previous digest while the
+     * file's size and mtime are unchanged.
+     *
+     * The poll runs every `EXTENSION_CHANGE_POLL_MS`, so hashing both files on
+     * every tick read and hashed the same bytes hundreds of times an hour for
+     * no new information. `stat` is the cheap change detector; the digest is
+     * recomputed only when it reports a difference.
+     */
     const digestFile = async (path: string, fallback: string): Promise<string> => {
       try {
         const info = await stat(path)
         if (!info.isFile() || info.size > LEGACY_CUSTOM_ASSET_LIMIT) return `invalid:${String(info.size)}:${String(info.mtimeMs)}`
-        return createHash('sha256').update(await readFile(path)).digest('hex')
+        const stamp = `${String(info.size)}:${String(info.mtimeMs)}`
+        const cached = this.legacyCustomStat.get(path)
+        if (cached !== undefined && cached.stamp === stamp) return cached.digest
+        const digest = createHash('sha256').update(await readFile(path)).digest('hex')
+        this.legacyCustomStat.set(path, { stamp, digest })
+        return digest
       } catch (error) {
+        this.legacyCustomStat.delete(path)
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return createHash('sha256').update(fallback).digest('hex')
         return `error:${String((error as NodeJS.ErrnoException).code ?? 'unknown')}`
       }

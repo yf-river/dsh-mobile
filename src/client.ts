@@ -4398,7 +4398,14 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
   void controlRequestJson('/api/mobile-access/release').then(renderRelease, () => {})
   void controlRequestJson('/api/mobile-access/lan/control').then(render, error => { status.textContent = t('requestFailed', { error: String(error) }) })
   loadRemote()
-  const remotePoll = window.setInterval(() => { if (!panel.hidden && !remoteView.hidden) { renderLanPairingExpiry(); loadRemote() } }, 1_500)
+  // Pairing expiry is minute-grained, so a 5 s tick refreshes it well before the
+  // displayed countdown matters. Skipping a hidden document avoids waking the
+  // radio for a panel nobody is looking at.
+  const remotePoll = window.setInterval(() => {
+    if (panel.hidden || remoteView.hidden || document.visibilityState !== 'visible') return
+    renderLanPairingExpiry()
+    loadRemote()
+  }, 5_000)
   const pollWsBlocked = (): void => {
     void controlRequestJson('/api/mobile-access/remote/websocket-paths/blocked').then(blocked => {
       const raw = Array.isArray(blocked.blocked) ? blocked.blocked : []

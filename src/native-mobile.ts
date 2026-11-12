@@ -413,6 +413,14 @@ export function markNativeMobileSettings(root: ParentNode): number {
 
 const AUTO_HISTORY_THRESHOLD_PX = 64
 
+/**
+ * Delay that collapses a burst of DOM mutations into one shell pass.
+ *
+ * Long enough to absorb the mutations a streaming reply produces, short enough
+ * that a drawer, panel or composer change still lands within one frame.
+ */
+export const SYNC_COALESCE_MS = 100
+
 /** Travel, in CSS pixels, that separates a header strip pan from a tap on a chip. */
 const STRIP_DRAG_THRESHOLD_PX = 8
 
@@ -1726,6 +1734,8 @@ export function installNativeMobileSurface(backServices: NativeMobileBackService
   let transitionTimer = 0
   let transitionTarget: HTMLElement | undefined
   let historyScroller: HTMLElement | undefined
+  /** Conversation container whose `<table>` wrappers the last pass already installed. */
+  let tableWrapTarget: HTMLElement | undefined
   let historySessionId: string | null = null
   let disposeHistoryGate: (() => void) | undefined
   let historyLoaderBinding: { readonly element: HTMLElement; readonly originalLabel: string | undefined } | undefined
@@ -1894,6 +1904,12 @@ export function installNativeMobileSurface(backServices: NativeMobileBackService
       if (nativeDrawer) viewArea?.removeAttribute('data-dsh-mobile-view')
       else if (viewArea !== undefined) viewArea.dataset.dshMobileView = 'true'
       const conversation = center.querySelector<HTMLElement>('[data-conversation-scroll]')
+      // The transcript is the one region that must keep the shell current while
+      // it streams: the history loader and message column are resolved from it.
+      // Observing this container instead of the whole body keeps a reply from
+      // scheduling a full pass, while still catching the row that appears once
+      // the loader hands over.
+      observeConversation(conversation ?? undefined)
       // Resolved before the binder call: the history gate's session identity is
       // read from this pass's composer, not the media binding's later capture.
       const composerCard = center.querySelector<HTMLElement>('[data-composer-card]')
@@ -1914,13 +1930,20 @@ export function installNativeMobileSurface(backServices: NativeMobileBackService
         messageColumn.dataset.dshMobileMessageColumn = 'true'
         messageScroll.dataset.dshMobileMessageScroll = 'true'
       }
-      for (const table of center.querySelectorAll<HTMLTableElement>('table')) {
-        const parent = table.parentElement
-        if (parent?.dataset.dshMobileTableScroll === 'true') continue
-        const wrapper = document.createElement('div')
-        wrapper.dataset.dshMobileTableScroll = 'true'
-        table.before(wrapper)
-        wrapper.append(table)
+      // Wrapping is idempotent per table, but a full re-query of the transcript
+      // on every pass is not: a long Session holds many tables, and the pass
+      // runs while the reply streams. Re-scan only when the container identity
+      // changes, which is also the only way new tables can arrive unwrapped.
+      if (tableWrapTarget !== center) {
+        tableWrapTarget = center
+        for (const table of center.querySelectorAll<HTMLTableElement>('table')) {
+          const parent = table.parentElement
+          if (parent?.dataset.dshMobileTableScroll === 'true') continue
+          const wrapper = document.createElement('div')
+          wrapper.dataset.dshMobileTableScroll = 'true'
+          table.before(wrapper)
+          wrapper.append(table)
+        }
       }
       const composerRow = composerCard?.querySelector<HTMLElement>(':scope > [data-input-scroll]')?.nextElementSibling
       if (!(composerRow instanceof HTMLElement)) {
@@ -1996,10 +2019,45 @@ export function installNativeMobileSurface(backServices: NativeMobileBackService
     backdrop.hidden = frame === undefined || !drawerScrimVisible(classToken(sidebarRoot, '_collapsed'), overlayQuery.matches)
     sidebarScrollMemory.sync()
   }
-  const schedule = (): void => { if (scheduled === 0) scheduled = requestAnimationFrame(sync) }
+  /**
+   * Coalesce DOM churn into one `sync()` per window.
+   *
+   * A streaming reply rewrites the transcript many times per frame, and the
+   * whole passed `sync()` re-resolves the frame, both sidebar columns, the
+   * composer and the history loader through a dozen `querySelector` calls. One
+   * pass per animation frame still ran for every token; a short timeout keeps
+   * the shell's published attributes current within a frame or two while
+   * collapsing a token burst into one pass.
+   */
+  const schedule = (): void => {
+    if (scheduled !== 0) return
+    scheduled = window.setTimeout(() => { scheduled = 0; sync() }, SYNC_COALESCE_MS)
+  }
   const observer = new MutationObserver(schedule)
-  // React publishes the band after resize; read the committed marker.
-  observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style', 'disabled', 'readonly', 'aria-busy', 'aria-selected', 'data-dsh-mobile-session', WIDE_LAYOUT_ATTRIBUTE] })
+  /** Conversation container currently observed for row and loader changes. */
+  let conversationTarget: HTMLElement | undefined
+  const conversationObserver = new MutationObserver(schedule)
+  /**
+   * Watch the transcript the shell derives per-row state from.
+   *
+   * The container is re-resolved on every pass, so this only re-binds when a
+   * different element becomes the scroller, and disconnects when the shell has
+   * no transcript (an empty Session, or a panel occupying `main`).
+   * @param next - the resolved conversation scroller, if any.
+   */
+  const observeConversation = (next: HTMLElement | undefined): void => {
+    if (conversationTarget === next) return
+    conversationObserver.disconnect()
+    conversationTarget = next
+    // `childList` only: row text changes are not shell state, while row arrival
+    // and removal move the history loader that is.
+    if (next !== undefined) conversationObserver.observe(next, { childList: true, subtree: true })
+  }
+  // Top-level children only: the synced state depends on which *columns* the
+  // frame owns, and those are replaced as whole subtrees. Descendant churn —
+  // every token of a reply — is not observed here; the pieces that need it
+  // listen on their own container (`observeConversation`).
+  observer.observe(document.body, { childList: true, attributes: true, attributeFilter: ['class', 'style', 'disabled', 'readonly', 'aria-busy', 'aria-selected', 'data-dsh-mobile-session', WIDE_LAYOUT_ATTRIBUTE] })
   overlayQuery.addEventListener('change', schedule)
   backdrop.addEventListener('click', () => { if (sidebar?.dataset.open === 'true') toggle?.click() })
   sync()
@@ -2059,6 +2117,8 @@ export function installNativeMobileSurface(backServices: NativeMobileBackService
     disposeEnterBinding?.()
     disposeBrowserComposerSoftEnter()
     observer.disconnect()
+    conversationObserver.disconnect()
+    conversationTarget = undefined
     overlayQuery.removeEventListener('change', schedule)
     document.removeEventListener('click', onBranchClick, true)
     document.removeEventListener('touchstart', onStripTouchStart, true)
@@ -2079,7 +2139,7 @@ export function installNativeMobileSurface(backServices: NativeMobileBackService
     branchToast.remove()
     mediaToast.remove()
     cameraButton.remove()
-    if (scheduled !== 0) cancelAnimationFrame(scheduled)
+    if (scheduled !== 0) window.clearTimeout(scheduled)
     if (transitionFrame !== 0) cancelAnimationFrame(transitionFrame)
     if (transitionRestartFrame !== 0) cancelAnimationFrame(transitionRestartFrame)
     if (transitionTimer !== 0) clearTimeout(transitionTimer)
