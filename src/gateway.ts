@@ -252,6 +252,8 @@ export const CLIENT_MODULE_MEASUREMENT_BUDGET_MS = 5_000
 const MOBILE_BOOT_SIZE_CACHE_TTL_MS = 30_000
 /** Marker header distinguishing size probes from ordinary proxied bundle fetches. */
 const MOBILE_BOOT_SIZE_PROBE_HEADER = 'x-dsh-mobile-size-probe'
+/** WebSocket upgrades slower than this report their timing; ordinary ones stay quiet. */
+const SLOW_STREAM_MIN_MS = 1_500
 const MAX_MOBILE_BOOT_BATCHES = 16
 const MOBILE_BOOT_UPSTREAM_ATTEMPTS = 4
 const MOBILE_BOOT_RETRY_DELAY_MS = 150
@@ -1590,6 +1592,31 @@ export class MobileAccessGateway {
   private readonly authFailures: AuthFailureRecorder
   private readonly httpFailures: HttpFailureRecorder
   private readonly apiLatency: ApiLatencyRecorder
+  /**
+   * Upgrades slower than this budget report their split timing. Opening a
+   * Session on a phone is exactly one upgrade plus its first frame, so these
+   * two numbers attribute the wait the user actually experiences.
+   */
+  private readonly slowStream = {
+    lastLogAt: 0,
+    suppressed: 0,
+    record: (sample: { readonly path: string; readonly handshakeMs: number }): void => {
+      if (sample.handshakeMs < SLOW_STREAM_MIN_MS) return
+      const now = Date.now()
+      if (now < this.slowStream.lastLogAt) { this.slowStream.suppressed += 1; return }
+      const suppressed = this.slowStream.suppressed
+      this.slowStream.lastLogAt = now + 30_000
+      this.slowStream.suppressed = 0
+      try {
+        this.slowStreamLog?.({
+          kind: 'upgrade',
+          path: sample.path,
+          handshakeMs: Math.round(sample.handshakeMs),
+          ...(suppressed === 0 ? {} : { suppressed }),
+        })
+      } catch { /* Diagnostic output never changes a WebSocket result. */ }
+    },
+  }
   private readonly upstreamAuthDiagnostics: UpstreamAuthRecorder
 
   constructor(
@@ -1605,6 +1632,7 @@ export class MobileAccessGateway {
     httpFailureLog?: (entry: HttpFailureEntry) => void,
     upstreamAuthLog?: (entry: UpstreamAuthEntry) => void,
     apiLatencyLog?: (entry: ApiLatencyEntry) => void,
+    private readonly slowStreamLog?: (entry: { readonly kind: 'upgrade'; readonly path: string; readonly handshakeMs: number; readonly suppressed?: number }) => void,
     private readonly pushGateway?: PushGatewayService,
   ) {
     this.authFailures = new AuthFailureRecorder(authFailureLog)
@@ -4519,6 +4547,7 @@ export class MobileAccessGateway {
   }
 
   private async handleUpgrade(request: IncomingMessage, client: Socket, head: Buffer): Promise<void> {
+    const upgradeStartedAt = performance.now()
     const target = parseRequestTarget(request.url)
     const policy = this.requirePolicy()
     // Android WebView WebSockets do not consistently carry Fetch Metadata.
@@ -4660,6 +4689,19 @@ export class MobileAccessGateway {
       upstream.setTimeout(0)
       client.write(handshake.header)
       if (handshake.remainder.length > 0) client.write(handshake.remainder)
+      /* Opening a Session on a phone spends its time somewhere between this
+         upgrade and the first frame that unblocks the message area. Record both
+         halves so the wait can be attributed instead of guessed: `handshakeMs`
+         covers browser->gateway->upstream upgrade, `firstFrameMs` covers waiting
+         for the upstream's first byte after the relay is wired. */
+      const firstFrame = (): void => {
+        upstream.off('data', firstFrame)
+        this.slowStream.record({
+          path: target.decodedPathname,
+          handshakeMs: performance.now() - upgradeStartedAt,
+        })
+      }
+      upstream.once('data', firstFrame)
       upstream.pipe(client)
       client.pipe(upstream)
       client.resume()

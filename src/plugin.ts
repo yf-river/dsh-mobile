@@ -902,6 +902,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
       entry => { logger.warn('http failure %s', JSON.stringify(entry)) },
       entry => { logger.info('upstream auth %s', JSON.stringify(entry)) },
       entry => { logger.warn('slow api %s', JSON.stringify(entry)) },
+      entry => { logger.warn('slow stream %s', JSON.stringify(entry)) },
       pushGatewayFacade,
     )
     await candidate.start()
@@ -990,6 +991,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
         entry => { logger.warn('http failure %s', JSON.stringify(entry)) },
         entry => { logger.info('upstream auth %s', JSON.stringify(entry)) },
         entry => { logger.warn('slow api %s', JSON.stringify(entry)) },
+        entry => { logger.warn('slow stream %s', JSON.stringify(entry)) },
         pushGatewayFacade,
       )
       await candidate.start()
@@ -1052,6 +1054,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
       entry => { logger.warn('http failure %s', JSON.stringify(entry)) },
       entry => { logger.info('upstream auth %s', JSON.stringify(entry)) },
       entry => { logger.warn('slow api %s', JSON.stringify(entry)) },
+      entry => { logger.warn('slow stream %s', JSON.stringify(entry)) },
       pushGatewayFacade,
     )
     try { await candidate.start() } catch (error) {
@@ -1069,6 +1072,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
       entry => { logger.warn('http failure %s', JSON.stringify(entry)) },
       entry => { logger.info('upstream auth %s', JSON.stringify(entry)) },
       entry => { logger.warn('slow api %s', JSON.stringify(entry)) },
+      entry => { logger.warn('slow stream %s', JSON.stringify(entry)) },
       pushGatewayFacade,
     )
     try { await candidate.start() } catch (error) {
