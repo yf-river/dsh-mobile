@@ -1600,8 +1600,10 @@ export class MobileAccessGateway {
   private readonly slowStream = {
     lastLogAt: 0,
     suppressed: 0,
-    record: (sample: { readonly path: string; readonly handshakeMs: number }): void => {
-      if (sample.handshakeMs < SLOW_STREAM_MIN_MS) return
+    record: (sample: { readonly path: string; readonly handshakeMs: number; readonly firstFrameMs: number }): void => {
+      // Report when either half is slow: a fast handshake followed by a slow
+      // first frame is exactly the shape a stalled message area takes.
+      if (sample.handshakeMs < SLOW_STREAM_MIN_MS && sample.firstFrameMs < SLOW_STREAM_MIN_MS) return
       const now = Date.now()
       if (now < this.slowStream.lastLogAt) { this.slowStream.suppressed += 1; return }
       const suppressed = this.slowStream.suppressed
@@ -1612,6 +1614,7 @@ export class MobileAccessGateway {
           kind: 'upgrade',
           path: sample.path,
           handshakeMs: Math.round(sample.handshakeMs),
+          firstFrameMs: Math.round(sample.firstFrameMs),
           ...(suppressed === 0 ? {} : { suppressed }),
         })
       } catch { /* Diagnostic output never changes a WebSocket result. */ }
@@ -1632,7 +1635,7 @@ export class MobileAccessGateway {
     httpFailureLog?: (entry: HttpFailureEntry) => void,
     upstreamAuthLog?: (entry: UpstreamAuthEntry) => void,
     apiLatencyLog?: (entry: ApiLatencyEntry) => void,
-    private readonly slowStreamLog?: (entry: { readonly kind: 'upgrade'; readonly path: string; readonly handshakeMs: number; readonly suppressed?: number }) => void,
+    private readonly slowStreamLog?: (entry: { readonly kind: 'upgrade'; readonly path: string; readonly handshakeMs: number; readonly firstFrameMs: number; readonly suppressed?: number }) => void,
     private readonly pushGateway?: PushGatewayService,
   ) {
     this.authFailures = new AuthFailureRecorder(authFailureLog)
@@ -4696,9 +4699,14 @@ export class MobileAccessGateway {
          folding that idle time into the handshake number made a healthy socket
          look like a 9-minute stall. */
       const handshakeMs = performance.now() - upgradeStartedAt
+      const relayWiredAt = performance.now()
       const firstFrame = (): void => {
         upstream.off('data', firstFrame)
-        this.slowStream.record({ path: target.decodedPathname, handshakeMs })
+        this.slowStream.record({
+          path: target.decodedPathname,
+          handshakeMs,
+          firstFrameMs: performance.now() - relayWiredAt,
+        })
       }
       upstream.once('data', firstFrame)
       upstream.pipe(client)
