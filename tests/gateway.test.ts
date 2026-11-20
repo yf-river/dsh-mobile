@@ -770,8 +770,13 @@ describe('HTTP gateway', () => {
     const literal = 'const HISTORY_PAGE_OPTIONS={maxMessages:500,turnWindow:{minMessages:50,minTurns:2}};'
     const body = Buffer.from(`other();${literal}tail();`)
     const rewritten = rewriteMobileHistoryPage(body).toString('utf8')
-    expect(rewritten).toContain('maxMessages:100,turnWindow:{minMessages:50')
+    expect(rewritten).toContain('maxMessages:40,turnWindow:{minMessages:20')
     expect(rewritten).not.toContain('maxMessages:500')
+    // DSH rejects the request when the turn floor exceeds the budget, so the
+    // rewritten pair must stay ordered.
+    const budget = Number(/maxMessages:(\d+),/.exec(rewritten)?.[1])
+    const floor = Number(/turnWindow:\{minMessages:(\d+)/.exec(rewritten)?.[1])
+    expect(floor).toBeLessThanOrEqual(budget)
     expect(rewritten).toContain('other();')
     expect(rewritten).toContain('tail();')
     // A bundle without the DSH literal must come back byte-identical.

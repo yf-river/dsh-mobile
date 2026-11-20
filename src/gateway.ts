@@ -272,10 +272,19 @@ const MOBILE_BOOT_RETRY_DELAY_MS = 150
  * DSH upgrade that changes the constant simply stops matching and the stock
  * behaviour returns instead of this gateway corrupting an unrelated bundle.
  */
-const MOBILE_HISTORY_PAGE_MESSAGES = 100
+const MOBILE_HISTORY_PAGE_MESSAGES = 40
+/**
+ * Floor for the turn window. DSH validates `turnWindow.minMessages <= maxMessages`
+ * and rejects the whole request otherwise, so the floor has to come down with the
+ * budget; leaving it at DSH's 50 would turn every open into a bad-request.
+ */
+const MOBILE_HISTORY_TURN_MIN_MESSAGES = 20
 /** Source form of the DSH literal this gateway narrows, paired with its replacement. */
 const MOBILE_HISTORY_PAGE_REWRITES: readonly (readonly [string, string])[] = Object.freeze([
-  ['maxMessages:500,turnWindow:{minMessages:50', `maxMessages:${MOBILE_HISTORY_PAGE_MESSAGES},turnWindow:{minMessages:50`],
+  [
+    'maxMessages:500,turnWindow:{minMessages:50',
+    `maxMessages:${MOBILE_HISTORY_PAGE_MESSAGES},turnWindow:{minMessages:${MOBILE_HISTORY_TURN_MIN_MESSAGES}`,
+  ],
 ])
 
 /** Narrow the opening-history budget in one assembled boot bundle; unmatched bodies pass through unchanged. */
