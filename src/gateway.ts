@@ -943,6 +943,11 @@ function replaceDedicatedMobilePushLinks(html: string): string {
 const MOBILE_DEFERRED_API_BOOTSTRAP = `(()=>{
   const DEFERRED=[/^\\/api\\/costMeter\\//,/^\\/api\\/session\\/modelCatalog/,/^\\/api\\/changes\\.summary/];
   const START_AFTER_MS=1200,STEP_MS=120,MAX_HOLD_MS=8000;
+  const later=window.setTimeout?window.setTimeout.bind(window):undefined;
+  const cancel=window.clearTimeout?window.clearTimeout.bind(window):undefined;
+  // Without real timers (a non-browser harness) ordering is impossible and
+  // pointless; leave fetch untouched rather than breaking the page.
+  if(later===undefined||cancel===undefined)return;
   const nativeFetch=window.fetch.bind(window);
   const matches=path=>DEFERRED.some(pattern=>pattern.test(path));
   const queue=[];let released=false,draining=false,armed=false;
@@ -952,15 +957,15 @@ const MOBILE_DEFERRED_API_BOOTSTRAP = `(()=>{
     const next=()=>{
       const entry=queue.shift();
       if(entry===undefined){draining=false;return}
-      window.clearTimeout(entry.timer);entry.run();
-      window.setTimeout(next,STEP_MS);
+      cancel(entry.timer);entry.run();
+      later(next,STEP_MS);
     };
     next();
   };
   const arm=()=>{
     if(armed)return;
     armed=true;
-    window.setTimeout(()=>{released=true;pump()},START_AFTER_MS);
+    later(()=>{released=true;pump()},START_AFTER_MS);
   };
   window.fetch=(input,init)=>{
     if(released)return nativeFetch(input,init);
@@ -976,14 +981,16 @@ const MOBILE_DEFERRED_API_BOOTSTRAP = `(()=>{
     let start;
     const promise=new Promise((resolve,reject)=>{start=()=>{nativeFetch(input,init).then(resolve,reject)}});
     const entry={run:start,timer:0};
-    entry.timer=window.setTimeout(()=>{
+    entry.timer=later(()=>{
       const index=queue.indexOf(entry);
       if(index!==-1){queue.splice(index,1);start()}
     },MAX_HOLD_MS);
     queue.push(entry);arm();
     return promise;
   };
-  if(document.readyState==='complete'||document.readyState==='interactive')arm();
+  // The DOM being interactive is the earliest reliable "shell is up" signal.
+  const ready=typeof document!=='undefined'?document.readyState:undefined;
+  if((ready==='complete'||ready==='interactive')||typeof window.addEventListener!=='function')arm();
   else window.addEventListener('DOMContentLoaded',arm,{once:true});
 })();`
 

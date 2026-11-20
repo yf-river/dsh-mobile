@@ -18,7 +18,7 @@ import { runInNewContext, Script } from 'node:vm'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parseGatewayConfig } from '../src/config.js'
-import { MobileAccessGateway, splitMobileBootBatch, type ApiLatencyEntry, type AuthFailureEntry } from '../src/gateway.js'
+import { MobileAccessGateway, rewriteMobileHistoryPage, splitMobileBootBatch, type ApiLatencyEntry, type AuthFailureEntry } from '../src/gateway.js'
 import { BlockedUpgradePathLog } from '../src/websocket-paths.js'
 import { CSRF_COOKIE, CSRF_HEADER, DEVICE_COOKIE, SESSION_COOKIE } from '../src/http-security.js'
 import { HOST_CSRF_COOKIE, HOST_DEVICE_COOKIE, HOST_SESSION_COOKIE } from '../src/browser-auth-cookies.js'
@@ -764,6 +764,19 @@ describe('HTTP gateway', () => {
     expect(split.plans).toEqual([])
     expect(split.rows).toHaveLength(entries.length)
     expect(split.rows.every(row => row.entries.length === 1 && row.url.startsWith('/plugins/'))).toBe(true)
+  })
+
+  it('narrows the opening history budget and leaves unrelated bundles untouched', () => {
+    const literal = 'const HISTORY_PAGE_OPTIONS={maxMessages:500,turnWindow:{minMessages:50,minTurns:2}};'
+    const body = Buffer.from(`other();${literal}tail();`)
+    const rewritten = rewriteMobileHistoryPage(body).toString('utf8')
+    expect(rewritten).toContain('maxMessages:100,turnWindow:{minMessages:50')
+    expect(rewritten).not.toContain('maxMessages:500')
+    expect(rewritten).toContain('other();')
+    expect(rewritten).toContain('tail();')
+    // A bundle without the DSH literal must come back byte-identical.
+    const untouched = Buffer.from('const unrelated={maxMessages:500,turnWindow:{minMessages:7}};')
+    expect(rewriteMobileHistoryPage(untouched)).toBe(untouched)
   })
 
   it('resolves query-only and relative upstream redirects against the actual request', async () => {
