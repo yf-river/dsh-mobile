@@ -24,6 +24,11 @@ const ROUTE_SEGMENTS: readonly string[] = Object.freeze([
   'mobile-access', 'plugins', 'plugin-manager', 'interactions', 'credentials', 'auth',
 ])
 
+/** Bounded `/sidebar/api` route categories, same rules as ROUTE_SEGMENTS. */
+const SIDEBAR_ROUTE_SEGMENTS: readonly string[] = Object.freeze([
+  'settings', 'session', 'sessions', 'workspace', 'workspaces', 'terminal', 'theme', 'phase',
+])
+
 /** One sampled API wait; `durationMs` spans the client's request to response close. */
 export type ApiLatencyEntry = {
   readonly kind: 'api'
@@ -41,6 +46,14 @@ export type ApiLatencyEntry = {
  */
 export function boundedApiPath(url: string | undefined): string | undefined {
   const pathname = url?.split('?', 1)[0] ?? ''
+  /* `/sidebar/api/*` carries the shell's own reads (session phase, settings,
+     selection-driven fetches). They are on the Session-switch path and were
+     invisible to this recorder, so a stall there looked like a stall nowhere. */
+  if (pathname.startsWith('/sidebar/api/')) {
+    const segment = pathname.slice('/sidebar/api/'.length).split('/', 1)[0] ?? ''
+    const category = segment.toLowerCase()
+    return SIDEBAR_ROUTE_SEGMENTS.includes(category) ? `/sidebar/api/${category}` : '/sidebar/api/other'
+  }
   if (!pathname.startsWith('/api/')) return undefined
   const segment = pathname.slice('/api/'.length).split('/', 1)[0] ?? ''
   const category = segment.toLowerCase()
