@@ -4683,6 +4683,15 @@ export class MobileAccessGateway {
           this.config.websocketCompression, this.config.upstreamTimeoutMs,
         )
         closeCompressedBridge = (code, reason) => { bridge.close(code, reason) }
+        /* This branch returns early, so the first-frame probe below never sees
+           it. `/api/remote.mux` — the socket the message area actually waits on —
+           is exactly this branch, which is why it produced no samples while the
+           uncompressed push sockets did. Time the bridge handshake directly. */
+        this.slowStream.record({
+          path: target.decodedPathname,
+          handshakeMs: performance.now() - upgradeStartedAt,
+          firstFrameMs: 0,
+        })
         return
       }
       await new Promise<void>((resolve, reject) => {
