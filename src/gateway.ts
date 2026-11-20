@@ -970,21 +970,7 @@ function replaceDedicatedMobilePushLinks(html: string): string {
  * a caller can never be stranded if the page never reaches that point.
  */
 const MOBILE_DEFERRED_API_BOOTSTRAP = `(()=>{
-  // Startup calls that are NOT on the message-area path. Each of these was
-  // measured taking 0.6-2.4s on the Host's own loopback; fired together they
-  // take the tunnel's bandwidth away from the one request the page waits on.
-  const DEFERRED=[
-    /^\\/api\\/costMeter\\//,
-    /^\\/api\\/session\\/modelCatalog/,
-    /^\\/api\\/changes\\.summary/,
-    /^\\/api\\/cotTranslation\\//,
-    /^\\/api\\/credentials\\/describe/,
-    /^\\/api\\/web\\/listProviders/,
-    /^\\/api\\/dynamicCordisRunner\\//,
-    /^\\/api\\/account\\/getNotifications/,
-    /^\\/api\\/mobile-access\\/release/,
-    /^\\/sidebar\\/api\\/settings\\.get/,
-  ];
+  const DEFERRED=[/^\\/api\\/costMeter\\//,/^\\/api\\/session\\/modelCatalog/,/^\\/api\\/changes\\.summary/];
   const START_AFTER_MS=600,STEP_MS=80,MAX_HOLD_MS=2500;
   const later=window.setTimeout?window.setTimeout.bind(window):undefined;
   const cancel=window.clearTimeout?window.clearTimeout.bind(window):undefined;
