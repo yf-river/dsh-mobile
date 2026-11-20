@@ -11,7 +11,12 @@
 const BOUNDED_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'])
 
 /** Requests below this budget are ordinary traffic and stay out of the log. */
-export const API_LATENCY_MIN_MS = 3_000
+/**
+ * Diagnostic budget. Lowered from 3s while tracking a Session-open stall: the
+ * wait is spread across several ordinary requests, none of which alone crosses
+ * three seconds, so a high floor reports nothing at all.
+ */
+export const API_LATENCY_MIN_MS = 300
 
 const LOG_INTERVAL_MS = 30_000
 const ROUTE_SEGMENTS: readonly string[] = Object.freeze([
