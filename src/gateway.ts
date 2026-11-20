@@ -4689,17 +4689,16 @@ export class MobileAccessGateway {
       upstream.setTimeout(0)
       client.write(handshake.header)
       if (handshake.remainder.length > 0) client.write(handshake.remainder)
-      /* Opening a Session on a phone spends its time somewhere between this
-         upgrade and the first frame that unblocks the message area. Record both
-         halves so the wait can be attributed instead of guessed: `handshakeMs`
-         covers browser->gateway->upstream upgrade, `firstFrameMs` covers waiting
-         for the upstream's first byte after the relay is wired. */
+      /* Attribute the wait between asking for a stream and receiving its first
+         byte. `handshakeMs` measures gateway->upstream upgrade only; the first
+         frame is reported separately because a push-only socket such as
+         `sidebar/ws/agent-opens` legitimately stays idle for minutes, and
+         folding that idle time into the handshake number made a healthy socket
+         look like a 9-minute stall. */
+      const handshakeMs = performance.now() - upgradeStartedAt
       const firstFrame = (): void => {
         upstream.off('data', firstFrame)
-        this.slowStream.record({
-          path: target.decodedPathname,
-          handshakeMs: performance.now() - upgradeStartedAt,
-        })
+        this.slowStream.record({ path: target.decodedPathname, handshakeMs })
       }
       upstream.once('data', firstFrame)
       upstream.pipe(client)
