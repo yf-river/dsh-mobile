@@ -239,7 +239,17 @@ function integer(value: unknown, name: string, fallback: number, minimum: number
 }
 
 /** Live paths the mobile gateway compresses by default; an explicit `paths: []` opts out. */
-export const DEFAULT_WEBSOCKET_COMPRESSION_PATHS = Object.freeze(['/api/remote.mux'])
+/**
+ * Live paths the mobile gateway compresses itself; empty means pass frames
+ * through untouched.
+ *
+ * The Host already deflates mux frames (`level: 1`) and the browser accepts that
+ * encoding end to end. Compressing here made the gateway inflate every frame and
+ * re-deflate it at `level: 3`, and that work sits on the single serialised write
+ * chain every logical stream shares — so the cost landed on whichever stream the
+ * user was waiting for.
+ */
+export const DEFAULT_WEBSOCKET_COMPRESSION_PATHS = Object.freeze([] as string[])
 
 function parseWebSocketCompression(raw: unknown): ResolvedWebSocketCompressionConfig {
   if (raw !== undefined && (typeof raw !== 'object' || raw === null || Array.isArray(raw))) {
