@@ -770,7 +770,7 @@ describe('HTTP gateway', () => {
     const literal = 'const HISTORY_PAGE_OPTIONS={maxMessages:500,turnWindow:{minMessages:50,minTurns:2}};'
     const body = Buffer.from(`other();${literal}tail();`)
     const rewritten = rewriteMobileHistoryPage(body).toString('utf8')
-    expect(rewritten).toContain('maxMessages:40,turnWindow:{minMessages:20')
+    expect(rewritten).toContain('maxMessages:10,turnWindow:{minMessages:6')
     expect(rewritten).not.toContain('maxMessages:500')
     // DSH rejects the request when the turn floor exceeds the budget, so the
     // rewritten pair must stay ordered.
@@ -782,6 +782,21 @@ describe('HTTP gateway', () => {
     // A bundle without the DSH literal must come back byte-identical.
     const untouched = Buffer.from('const unrelated={maxMessages:500,turnWindow:{minMessages:7}};')
     expect(rewriteMobileHistoryPage(untouched)).toBe(untouched)
+  })
+
+  it('changes the boot batch URL when only the bundle rewrite changes', () => {
+    // A batch URL that stays fixed across a rewrite lets the browser serve the
+    // previous bytes from disk cache, which makes a deployed change look inert.
+    const entries = [{ id: 'module-a', url: '/plugins/module-a.js?rev=1', rev: '1' }]
+    const sizes = new Map(entries.map(entry => [entry.url, 0]))
+    const first = splitMobileBootBatch(entries, sizes, new Set())
+    const second = splitMobileBootBatch(entries, sizes, new Set())
+    expect(second.rows).toEqual(first.rows)
+    // The revision must be derived from the rewrite table, so a different
+    // budget cannot ever reuse the same path.
+    expect(rewriteMobileHistoryPage(Buffer.from('maxMessages:500,turnWindow:{minMessages:50'))).not.toEqual(
+      Buffer.from('maxMessages:500,turnWindow:{minMessages:50'),
+    )
   })
 
   it('resolves query-only and relative upstream redirects against the actual request', async () => {

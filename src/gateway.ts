@@ -272,13 +272,25 @@ const MOBILE_BOOT_RETRY_DELAY_MS = 150
  * DSH upgrade that changes the constant simply stops matching and the stock
  * behaviour returns instead of this gateway corrupting an unrelated bundle.
  */
-const MOBILE_HISTORY_PAGE_MESSAGES = 40
+const MOBILE_HISTORY_PAGE_MESSAGES = 10
 /**
  * Floor for the turn window. DSH validates `turnWindow.minMessages <= maxMessages`
  * and rejects the whole request otherwise, so the floor has to come down with the
  * budget; leaving it at DSH's 50 would turn every open into a bad-request.
  */
-const MOBILE_HISTORY_TURN_MIN_MESSAGES = 20
+const MOBILE_HISTORY_TURN_MIN_MESSAGES = 6
+/**
+ * Revision of the bundle-text rewrites applied during assembly.
+ *
+ * Derived from the rewrite table itself, never from a hand-maintained version:
+ * a hand-maintained number is exactly what gets forgotten, and forgetting it
+ * leaves the boot URL unchanged after a rewrite so browsers keep serving the
+ * previous bytes.
+ */
+const MOBILE_BUNDLE_REWRITE_REVISION = createHash('sha256')
+  .update(JSON.stringify([MOBILE_HISTORY_PAGE_MESSAGES, MOBILE_HISTORY_TURN_MIN_MESSAGES]))
+  .digest('hex')
+
 /** Source form of the DSH literal this gateway narrows, paired with its replacement. */
 const MOBILE_HISTORY_PAGE_REWRITES: readonly (readonly [string, string])[] = Object.freeze([
   [
@@ -588,6 +600,12 @@ function revisionedMobileBatchPath(entries: readonly MobileBootBatchEntry[]): { 
   const key = createHash('sha256')
     .update(DSH_MOBILE_VERSION)
     .update(JSON.stringify(entries))
+    /* Assembly rewrites bundle text (the narrowed history window), so the
+       revision must cover that rewrite too. Hashing only the version and the
+       entry list gave an unchanged URL after a rewrite, and the browser then
+       served the previous bytes from disk cache — a deployed change looked
+       like it had no effect at all. */
+    .update(MOBILE_BUNDLE_REWRITE_REVISION)
     .digest('hex')
   return { key, path: `${MOBILE_BOOT_BATCH_PREFIX}${key}.js` }
 }
