@@ -256,6 +256,34 @@ const MAX_MOBILE_BOOT_BATCHES = 16
 const MOBILE_BOOT_UPSTREAM_ATTEMPTS = 4
 const MOBILE_BOOT_RETRY_DELAY_MS = 150
 
+/**
+ * Mobile opening-history budget, in messages.
+ *
+ * DSH opens a Session with `HISTORY_PAGE_OPTIONS = { maxMessages: 500, ... }`.
+ * On a phone that first snapshot is the request the user is waiting for, and a
+ * long session turns it into a multi-megabyte payload over the remote tunnel.
+ * The Session UI only needs the latest few turns to paint; everything older is
+ * reachable through the ordinary `loadOlder` affordance ("载入更早的消息").
+ *
+ * The gateway therefore rewrites that one literal while assembling the boot
+ * bundles. It is deliberately narrow: the exact source text must match, so a
+ * DSH upgrade that changes the constant simply stops matching and the stock
+ * behaviour returns instead of this gateway corrupting an unrelated bundle.
+ */
+const MOBILE_HISTORY_PAGE_MESSAGES = 100
+/** Source form of the DSH literal this gateway narrows, paired with its replacement. */
+const MOBILE_HISTORY_PAGE_REWRITES: readonly (readonly [string, string])[] = Object.freeze([
+  ['maxMessages:500,turnWindow:{minMessages:50', `maxMessages:${MOBILE_HISTORY_PAGE_MESSAGES},turnWindow:{minMessages:50`],
+])
+
+/** Narrow the opening-history budget in one assembled boot bundle; unmatched bodies pass through unchanged. */
+export function rewriteMobileHistoryPage(body: Buffer): Buffer {
+  const source = body.toString('utf8')
+  let next = source
+  for (const [from, to] of MOBILE_HISTORY_PAGE_REWRITES) next = next.split(from).join(to)
+  return next === source ? body : Buffer.from(next, 'utf8')
+}
+
 
 /**
  * Sanitize an installed package's description for the settings panel.
@@ -897,6 +925,68 @@ function replaceDedicatedMobilePushLinks(html: string): string {
   return `${cleaned.slice(0, position)}${MOBILE_PUSH_HEAD_LINKS}${cleaned.slice(position)}`
 }
 
+/**
+ * Hold cold-start, bandwidth-heavy API calls until the opening history has had
+ * its chance at the tunnel.
+ *
+ * Measured on this deployment: `session/modelCatalog`, `costMeter/getLocalState`
+ * and `costMeter/getTurnCost` each take 1.5-2.4s on the Host's own loopback the
+ * first time (provider probing and cost scans, before any network cost), and
+ * `changes.summary` competes for the same bandwidth. Fired simultaneously with
+ * the opening history snapshot they delay the one request the user is waiting
+ * on, which renders as「载入历史…」on a slow remote connection.
+ *
+ * These calls are never dropped: each is queued and replayed untouched, one at
+ * a time, once the shell is interactive. A hard cap releases any entry early so
+ * a caller can never be stranded if the page never reaches that point.
+ */
+const MOBILE_DEFERRED_API_BOOTSTRAP = `(()=>{
+  const DEFERRED=[/^\\/api\\/costMeter\\//,/^\\/api\\/session\\/modelCatalog/,/^\\/api\\/changes\\.summary/];
+  const START_AFTER_MS=1200,STEP_MS=120,MAX_HOLD_MS=8000;
+  const nativeFetch=window.fetch.bind(window);
+  const matches=path=>DEFERRED.some(pattern=>pattern.test(path));
+  const queue=[];let released=false,draining=false,armed=false;
+  const pump=()=>{
+    if(draining)return;
+    draining=true;
+    const next=()=>{
+      const entry=queue.shift();
+      if(entry===undefined){draining=false;return}
+      window.clearTimeout(entry.timer);entry.run();
+      window.setTimeout(next,STEP_MS);
+    };
+    next();
+  };
+  const arm=()=>{
+    if(armed)return;
+    armed=true;
+    window.setTimeout(()=>{released=true;pump()},START_AFTER_MS);
+  };
+  window.fetch=(input,init)=>{
+    if(released)return nativeFetch(input,init);
+    let path;
+    try{
+      const raw=typeof input==='string'?input:input instanceof URL?input.href:input instanceof Request?input.url:undefined;
+      if(raw===undefined)return nativeFetch(input,init);
+      const target=new URL(raw,location.href);
+      if(target.origin!==location.origin)return nativeFetch(input,init);
+      path=target.pathname;
+    }catch{return nativeFetch(input,init)}
+    if(!matches(path))return nativeFetch(input,init);
+    let start;
+    const promise=new Promise((resolve,reject)=>{start=()=>{nativeFetch(input,init).then(resolve,reject)}});
+    const entry={run:start,timer:0};
+    entry.timer=window.setTimeout(()=>{
+      const index=queue.indexOf(entry);
+      if(index!==-1){queue.splice(index,1);start()}
+    },MAX_HOLD_MS);
+    queue.push(entry);arm();
+    return promise;
+  };
+  if(document.readyState==='complete'||document.readyState==='interactive')arm();
+  else window.addEventListener('DOMContentLoaded',arm,{once:true});
+})();`
+
 function rewriteMobileIndexWithBatch(
   html: string,
   options: { readonly sizes?: ReadonlyMap<string, number>; readonly passThrough?: ReadonlySet<string>; readonly excludedClientModules?: readonly string[]; readonly csrfCookie?: string; readonly viewId?: string; readonly compatPath?: string } = {},
@@ -904,7 +994,7 @@ function rewriteMobileIndexWithBatch(
   const plan = parseMobileBootPlan(html, options.excludedClientModules)
   const projected = projectMobileBootGraph(plan, options)
   const transportBootstrap = projected.graphTransport ? mobileAuthenticatedTransportBootstrap(options.viewId) : ''
-  const replacement = `${MOBILE_GATEWAY_REACHABILITY_BOOTSTRAP}${transportBootstrap}${mobileCsrfFetchBootstrap(options.csrfCookie ?? CSRF_COOKIE)}window.__DSH_MOBILE_FRONTEND__="dedicated";${plan.assignment}${JSON.stringify(plan.parsed)};`
+  const replacement = `${MOBILE_GATEWAY_REACHABILITY_BOOTSTRAP}${transportBootstrap}${MOBILE_DEFERRED_API_BOOTSTRAP}${mobileCsrfFetchBootstrap(options.csrfCookie ?? CSRF_COOKIE)}window.__DSH_MOBILE_FRONTEND__="dedicated";${plan.assignment}${JSON.stringify(plan.parsed)};`
   const rewritten = `${html.slice(0, plan.replaceStart)}${replacement}${html.slice(plan.replaceEnd)}`
   return Object.freeze({
     html: replaceDedicatedMobilePushLinks(ensureMobileGatewayMarker(ensureMobileViewport(ensureMobileCompatibility(rewriteMobileApplicationPreloads(rewritten, projected.preloadReplacements), options.compatPath)))),
@@ -3621,7 +3711,7 @@ export class MobileAccessGateway {
         const entry = plan.entries[index]!
         bodies[index] = entry.id === MOBILE_LAYOUT_MODULE
           ? await readFile(this.config.mobileLayoutFile, { signal })
-          : await this.readUpstreamClientBundleWithRetry(entry.url, signal)
+          : rewriteMobileHistoryPage(await this.readUpstreamClientBundleWithRetry(entry.url, signal))
         if (bodies[index]!.byteLength > MAX_MOBILE_BOOT_ENTRY_BYTES) throw new HttpError(502, 'upstream_unavailable')
       }
     }
