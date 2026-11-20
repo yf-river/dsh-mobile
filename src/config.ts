@@ -238,8 +238,17 @@ function integer(value: unknown, name: string, fallback: number, minimum: number
   return resolved
 }
 
-/** Live paths the mobile gateway compresses by default; an explicit `paths: []` opts out. */
-export const DEFAULT_WEBSOCKET_COMPRESSION_PATHS = Object.freeze(['/api/remote.mux'])
+/**
+ * Live paths the mobile gateway compresses by default.
+ *
+ * `remote.mux` carried the Session stream and was compressed here so sparse
+ * frames would cost less on the wire. Measured on this deployment over the
+ * remote tunnel, the deflate/inflate round trip on that socket cost about three
+ * seconds per Session open while saving bytes the opening window no longer
+ * sends (it is a handful of messages). The bridge is left available for an
+ * explicit `paths` opt-in, but nothing is compressed by default.
+ */
+export const DEFAULT_WEBSOCKET_COMPRESSION_PATHS = Object.freeze([] as string[])
 
 function parseWebSocketCompression(raw: unknown): ResolvedWebSocketCompressionConfig {
   if (raw !== undefined && (typeof raw !== 'object' || raw === null || Array.isArray(raw))) {
