@@ -944,7 +944,7 @@ function replaceDedicatedMobilePushLinks(html: string): string {
  */
 const MOBILE_DEFERRED_API_BOOTSTRAP = `(()=>{
   const DEFERRED=[/^\\/api\\/costMeter\\//,/^\\/api\\/session\\/modelCatalog/,/^\\/api\\/changes\\.summary/];
-  const START_AFTER_MS=1200,STEP_MS=120,MAX_HOLD_MS=8000;
+  const START_AFTER_MS=600,STEP_MS=80,MAX_HOLD_MS=2500;
   const later=window.setTimeout?window.setTimeout.bind(window):undefined;
   const cancel=window.clearTimeout?window.clearTimeout.bind(window):undefined;
   // Without real timers (a non-browser harness) ordering is impossible and
